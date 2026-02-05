@@ -33,7 +33,7 @@ const PORT = process.env.PORT || 5001;
 
 // --- MONGOOSE SCHEMAS ---
 
-// Products Schema - Updated with new fields
+// Products Schema - Updated with status tracking and rich text support
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   price: { type: Number, required: true, min: 0 },
@@ -41,8 +41,22 @@ const productSchema = new mongoose.Schema({
   mainImagePublicId: { type: String, required: true },
   otherPhotos: [{ type: String }],
   otherPhotosPublicIds: [{ type: String }],
-  description: { type: String, required: false, trim: true },
+  
+  // Rich text description (supports HTML formatting)
+  description: { type: String, required: false },
+  
   classifications: { type: String, required: false, trim: true },
+  
+  // NEW: Status tracking fields (ALL OPTIONAL)
+  status: { 
+    type: String, 
+    enum: ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'],
+    default: 'available',
+    required: false
+  },
+  statusNote: { type: String, trim: true, required: false }, // Optional note about status
+  expectedArrival: { type: Date, required: false }, // For 'on_the_way' status
+  
   uploadDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 
@@ -121,7 +135,15 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
   console.log('📦 Product upload request');
   
   try {
-    const { name, price, description, classifications } = req.body;
+    const { 
+      name, 
+      price, 
+      description, 
+      classifications,
+      status,
+      statusNote,
+      expectedArrival
+    } = req.body;
 
     // Validation
     if (!name) {
@@ -139,16 +161,23 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
     const mainImageFile = req.files.mainImage[0];
     const otherPhotosFiles = req.files.otherPhotos || [];
 
-    const newProduct = new Product({
+    const productData = {
       name: name.trim(),
       price: parseFloat(price),
       mainImage: mainImageFile.path,
       mainImagePublicId: mainImageFile.filename,
       otherPhotos: otherPhotosFiles.map(file => file.path),
       otherPhotosPublicIds: otherPhotosFiles.map(file => file.filename),
-      description: description ? description.trim() : '',
+      description: description || '', // Preserve formatting (line breaks, etc.)
       classifications: classifications ? classifications.trim() : '',
-    });
+    };
+
+    // Only add status fields if they are provided
+    if (status) productData.status = status;
+    if (statusNote) productData.statusNote = statusNote.trim();
+    if (expectedArrival) productData.expectedArrival = new Date(expectedArrival);
+
+    const newProduct = new Product(productData);
 
     await newProduct.save();
     console.log(`✅ Product created: ${newProduct._id}`);
@@ -167,7 +196,12 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
 // GET ALL PRODUCTS
 app.get("/products", checkDbConnection, async (req, res) => {
   try {
-    const products = await Product.find().sort({ uploadDate: -1 });
+    const { status } = req.query;
+    
+    // Filter by status if provided
+    const filter = status ? { status } : {};
+    
+    const products = await Product.find(filter).sort({ uploadDate: -1 });
     res.json({ products });
   } catch (error) {
     console.error('❌ Error fetching products:', error);
@@ -195,7 +229,16 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
   { name: 'otherPhotos', maxCount: 10 }
 ]), async (req, res) => {
   try {
-    const { name, price, description, classifications } = req.body;
+    const { 
+      name, 
+      price, 
+      description, 
+      classifications,
+      status,
+      statusNote,
+      expectedArrival
+    } = req.body;
+    
     const product = await Product.findById(req.params.id);
 
     if (!product) {
@@ -211,8 +254,15 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
       }
       product.price = parsedPrice;
     }
-    if (description !== undefined) product.description = description.trim();
+    if (description !== undefined) product.description = description; // Preserve formatting
     if (classifications !== undefined) product.classifications = classifications.trim();
+    
+    // Update status fields
+    if (status !== undefined) product.status = status;
+    if (statusNote !== undefined) product.statusNote = statusNote.trim();
+    if (expectedArrival !== undefined) {
+      product.expectedArrival = expectedArrival ? new Date(expectedArrival) : null;
+    }
 
     // Update main image if new one is uploaded
     if (req.files && req.files.mainImage) {
@@ -244,6 +294,41 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
   }
 });
 
+// UPDATE PRODUCT STATUS ONLY (Quick status change endpoint)
+app.patch("/products/:id/status", checkDbConnection, async (req, res) => {
+  try {
+    const { status, statusNote, expectedArrival } = req.body;
+    
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Validate status
+    const validStatuses = ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'];
+    if (status && !validStatuses.includes(status)) {
+      return res.status(400).json({ 
+        error: "Invalid status", 
+        validStatuses 
+      });
+    }
+
+    if (status !== undefined) product.status = status;
+    if (statusNote !== undefined) product.statusNote = statusNote.trim();
+    if (expectedArrival !== undefined) {
+      product.expectedArrival = expectedArrival ? new Date(expectedArrival) : null;
+    }
+
+    await product.save();
+    console.log(`✅ Product status updated: ${req.params.id} -> ${status}`);
+
+    res.json({ message: "Product status updated successfully", product });
+  } catch (error) {
+    console.error('❌ Error updating product status:', error);
+    res.status(500).json({ error: "Failed to update product status" });
+  }
+});
+
 // DELETE PRODUCT
 app.delete("/products/:id", checkDbConnection, async (req, res) => {
   try {
@@ -267,6 +352,27 @@ app.delete("/products/:id", checkDbConnection, async (req, res) => {
   } catch (error) {
     console.error('❌ Error deleting product:', error);
     res.status(500).json({ error: "Failed to delete product" });
+  }
+});
+
+// GET PRODUCTS BY STATUS
+app.get("/products/status/:status", checkDbConnection, async (req, res) => {
+  try {
+    const { status } = req.params;
+    
+    const validStatuses = ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ 
+        error: "Invalid status", 
+        validStatuses 
+      });
+    }
+
+    const products = await Product.find({ status }).sort({ uploadDate: -1 });
+    res.json({ products, count: products.length });
+  } catch (error) {
+    console.error('❌ Error fetching products by status:', error);
+    res.status(500).json({ error: "Failed to fetch products" });
   }
 });
 
@@ -307,12 +413,20 @@ const startServer = async () => {
       console.log(`🌐 Server listening on port ${PORT}`);
       console.log(`🔗 Server URL: http://localhost:${PORT}`);
       console.log(`\n📋 Available Endpoints:`);
-      console.log(`   GET    /              - Health check`);
-      console.log(`   GET    /products      - Get all products`);
-      console.log(`   POST   /products/upload - Create product`);
-      console.log(`   GET    /products/:id  - Get single product`);
-      console.log(`   PUT    /products/:id  - Update product`);
-      console.log(`   DELETE /products/:id  - Delete product`);
+      console.log(`   GET    /                        - Health check`);
+      console.log(`   GET    /products                - Get all products`);
+      console.log(`   POST   /products/upload         - Create product`);
+      console.log(`   GET    /products/:id            - Get single product`);
+      console.log(`   PUT    /products/:id            - Update product`);
+      console.log(`   PATCH  /products/:id/status     - Update product status only`);
+      console.log(`   DELETE /products/:id            - Delete product`);
+      console.log(`   GET    /products/status/:status - Get products by status`);
+      console.log('\n📦 Available Statuses:');
+      console.log(`   - available    : In stock and ready`);
+      console.log(`   - restoring    : Being restocked/restored`);
+      console.log(`   - on_the_way   : Product is in transit`);
+      console.log(`   - out_of_stock : Temporarily unavailable`);
+      console.log(`   - discontinued : No longer available`);
       console.log('\n✅ Server is ready to accept requests!\n');
     });
 
