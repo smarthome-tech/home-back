@@ -33,7 +33,7 @@ const PORT = process.env.PORT || 5001;
 
 // --- MONGOOSE SCHEMAS ---
 
-// Products Schema - Updated with status tracking and rich text support
+// Products Schema
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   price: { type: Number, required: true, min: 0 },
@@ -47,39 +47,27 @@ const productSchema = new mongoose.Schema({
 
   classifications: { type: String, required: false, trim: true },
 
-  // NEW: Status tracking fields (ALL OPTIONAL)
+  // Status tracking fields (ALL OPTIONAL)
   status: {
     type: String,
     enum: ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'],
     default: 'available',
     required: false
   },
-  statusNote: { type: String, trim: true, required: false }, // Optional note about status
-  expectedArrival: { type: Date, required: false }, // For 'on_the_way' status
+  statusNote: { type: String, trim: true, required: false },
+  expectedArrival: { type: Date, required: false },
 
   uploadDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// NEW: Site Settings Schema
+// Site Settings Schema - Single language (Georgian)
 const siteSettingsSchema = new mongoose.Schema({
-  // Landing page text (multilingual support)
-  landingTitle: {
-    ka: { type: String, default: '' },
-    en: { type: String, default: '' },
-    ru: { type: String, default: '' }
-  },
-  landingDescription: {
-    ka: { type: String, default: '' },
-    en: { type: String, default: '' },
-    ru: { type: String, default: '' }
-  },
+  // Landing page text
+  landingTitle: { type: String, default: '' },
+  landingDescription: { type: String, default: '' },
 
-  // About us text (multilingual support)
-  aboutText: {
-    ka: { type: String, default: '' },
-    en: { type: String, default: '' },
-    ru: { type: String, default: '' }
-  },
+  // About us text
+  aboutText: { type: String, default: '' },
 
   // Landing banner image
   landingBanner: { type: String, default: '' },
@@ -201,7 +189,7 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
       mainImagePublicId: mainImageFile.filename,
       otherPhotos: otherPhotosFiles.map(file => file.path),
       otherPhotosPublicIds: otherPhotosFiles.map(file => file.filename),
-      description: description || '', // Preserve formatting (line breaks, etc.)
+      description: description || '',
       classifications: classifications ? classifications.trim() : '',
     };
 
@@ -287,7 +275,7 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
       }
       product.price = parsedPrice;
     }
-    if (description !== undefined) product.description = description; // Preserve formatting
+    if (description !== undefined) product.description = description;
     if (classifications !== undefined) product.classifications = classifications.trim();
 
     // Update status fields
@@ -430,22 +418,16 @@ app.get("/settings", checkDbConnection, async (req, res) => {
   }
 });
 
-// UPDATE SITE SETTINGS (with optional image uploads)
+// UPDATE ALL SITE SETTINGS (with optional image uploads)
 app.put("/settings", checkDbConnection, uploadImage.fields([
   { name: 'landingBanner', maxCount: 1 },
   { name: 'logo', maxCount: 1 }
 ]), async (req, res) => {
   try {
     const {
-      landingTitle_ka,
-      landingTitle_en,
-      landingTitle_ru,
-      landingDescription_ka,
-      landingDescription_en,
-      landingDescription_ru,
-      aboutText_ka,
-      aboutText_en,
-      aboutText_ru
+      landingTitle,
+      landingDescription,
+      aboutText
     } = req.body;
 
     let settings = await SiteSettings.findOne();
@@ -456,23 +438,13 @@ app.put("/settings", checkDbConnection, uploadImage.fields([
     }
 
     // Update text fields
-    if (landingTitle_ka !== undefined) settings.landingTitle.ka = landingTitle_ka;
-    if (landingTitle_en !== undefined) settings.landingTitle.en = landingTitle_en;
-    if (landingTitle_ru !== undefined) settings.landingTitle.ru = landingTitle_ru;
-
-    if (landingDescription_ka !== undefined) settings.landingDescription.ka = landingDescription_ka;
-    if (landingDescription_en !== undefined) settings.landingDescription.en = landingDescription_en;
-    if (landingDescription_ru !== undefined) settings.landingDescription.ru = landingDescription_ru;
-
-    if (aboutText_ka !== undefined) settings.aboutText.ka = aboutText_ka;
-    if (aboutText_en !== undefined) settings.aboutText.en = aboutText_en;
-    if (aboutText_ru !== undefined) settings.aboutText.ru = aboutText_ru;
+    if (landingTitle !== undefined) settings.landingTitle = landingTitle;
+    if (landingDescription !== undefined) settings.landingDescription = landingDescription;
+    if (aboutText !== undefined) settings.aboutText = aboutText;
 
     // Update landing banner if uploaded
     if (req.files && req.files.landingBanner) {
-      // Delete old banner
       await safeCloudinaryDestroy(settings.landingBannerPublicId);
-
       const bannerFile = req.files.landingBanner[0];
       settings.landingBanner = bannerFile.path;
       settings.landingBannerPublicId = bannerFile.filename;
@@ -480,9 +452,7 @@ app.put("/settings", checkDbConnection, uploadImage.fields([
 
     // Update logo if uploaded
     if (req.files && req.files.logo) {
-      // Delete old logo
       await safeCloudinaryDestroy(settings.logoPublicId);
-
       const logoFile = req.files.logo[0];
       settings.logo = logoFile.path;
       settings.logoPublicId = logoFile.filename;
@@ -503,27 +473,15 @@ app.put("/settings", checkDbConnection, uploadImage.fields([
 // UPDATE ONLY LANDING TEXT (no images)
 app.patch("/settings/landing", checkDbConnection, async (req, res) => {
   try {
-    const {
-      landingTitle_ka,
-      landingTitle_en,
-      landingTitle_ru,
-      landingDescription_ka,
-      landingDescription_en,
-      landingDescription_ru
-    } = req.body;
+    const { landingTitle, landingDescription } = req.body;
 
     let settings = await SiteSettings.findOne();
     if (!settings) {
       settings = new SiteSettings();
     }
 
-    if (landingTitle_ka !== undefined) settings.landingTitle.ka = landingTitle_ka;
-    if (landingTitle_en !== undefined) settings.landingTitle.en = landingTitle_en;
-    if (landingTitle_ru !== undefined) settings.landingTitle.ru = landingTitle_ru;
-
-    if (landingDescription_ka !== undefined) settings.landingDescription.ka = landingDescription_ka;
-    if (landingDescription_en !== undefined) settings.landingDescription.en = landingDescription_en;
-    if (landingDescription_ru !== undefined) settings.landingDescription.ru = landingDescription_ru;
+    if (landingTitle !== undefined) settings.landingTitle = landingTitle;
+    if (landingDescription !== undefined) settings.landingDescription = landingDescription;
 
     settings.updatedAt = new Date();
     await settings.save();
@@ -540,20 +498,14 @@ app.patch("/settings/landing", checkDbConnection, async (req, res) => {
 // UPDATE ONLY ABOUT TEXT (no images)
 app.patch("/settings/about", checkDbConnection, async (req, res) => {
   try {
-    const {
-      aboutText_ka,
-      aboutText_en,
-      aboutText_ru
-    } = req.body;
+    const { aboutText } = req.body;
 
     let settings = await SiteSettings.findOne();
     if (!settings) {
       settings = new SiteSettings();
     }
 
-    if (aboutText_ka !== undefined) settings.aboutText.ka = aboutText_ka;
-    if (aboutText_en !== undefined) settings.aboutText.en = aboutText_en;
-    if (aboutText_ru !== undefined) settings.aboutText.ru = aboutText_ru;
+    if (aboutText !== undefined) settings.aboutText = aboutText;
 
     settings.updatedAt = new Date();
     await settings.save();
@@ -649,7 +601,6 @@ const startServer = async () => {
     console.log('🔄 Connecting to MongoDB...');
     console.log('📍 MongoDB URI:', MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@'));
 
-    // Connect to MongoDB FIRST with options
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
@@ -658,7 +609,6 @@ const startServer = async () => {
     console.log('✅ Connected to MongoDB successfully!');
     console.log('📊 Database:', mongoose.connection.db.databaseName);
 
-    // THEN start the server
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 SmartHome Server Running!`);
       console.log(`🌐 Server listening on port ${PORT}`);
@@ -740,5 +690,4 @@ const startServer = async () => {
   }
 };
 
-// Start the server
 startServer();
