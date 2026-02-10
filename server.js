@@ -41,27 +41,60 @@ const productSchema = new mongoose.Schema({
   mainImagePublicId: { type: String, required: true },
   otherPhotos: [{ type: String }],
   otherPhotosPublicIds: [{ type: String }],
-  
+
   // Rich text description (supports HTML formatting)
   description: { type: String, required: false },
-  
+
   classifications: { type: String, required: false, trim: true },
-  
+
   // NEW: Status tracking fields (ALL OPTIONAL)
-  status: { 
-    type: String, 
+  status: {
+    type: String,
     enum: ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'],
     default: 'available',
     required: false
   },
   statusNote: { type: String, trim: true, required: false }, // Optional note about status
   expectedArrival: { type: Date, required: false }, // For 'on_the_way' status
-  
+
   uploadDate: { type: Date, default: Date.now },
+}, { timestamps: true });
+
+// NEW: Site Settings Schema
+const siteSettingsSchema = new mongoose.Schema({
+  // Landing page text (multilingual support)
+  landingTitle: {
+    ka: { type: String, default: '' },
+    en: { type: String, default: '' },
+    ru: { type: String, default: '' }
+  },
+  landingDescription: {
+    ka: { type: String, default: '' },
+    en: { type: String, default: '' },
+    ru: { type: String, default: '' }
+  },
+
+  // About us text (multilingual support)
+  aboutText: {
+    ka: { type: String, default: '' },
+    en: { type: String, default: '' },
+    ru: { type: String, default: '' }
+  },
+
+  // Landing banner image
+  landingBanner: { type: String, default: '' },
+  landingBannerPublicId: { type: String, default: '' },
+
+  // Logo image
+  logo: { type: String, default: '' },
+  logoPublicId: { type: String, default: '' },
+
+  updatedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
 // --- MODELS ---
 const Product = mongoose.model('Product', productSchema);
+const SiteSettings = mongoose.model('SiteSettings', siteSettingsSchema);
 
 // --- EXPRESS APP SETUP ---
 const app = express();
@@ -69,7 +102,7 @@ const app = express();
 // --- MIDDLEWARE ---
 app.use(cors({
   origin: '*',
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: false
 }));
@@ -80,9 +113,9 @@ app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 // --- DATABASE CONNECTION CHECK MIDDLEWARE ---
 const checkDbConnection = (req, res, next) => {
   if (mongoose.connection.readyState !== 1) {
-    return res.status(503).json({ 
-      error: "Database unavailable", 
-      message: "MongoDB connection is not ready. Please try again later." 
+    return res.status(503).json({
+      error: "Database unavailable",
+      message: "MongoDB connection is not ready. Please try again later."
     });
   }
   next();
@@ -133,12 +166,12 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
   { name: 'otherPhotos', maxCount: 10 }
 ]), async (req, res) => {
   console.log('📦 Product upload request');
-  
+
   try {
-    const { 
-      name, 
-      price, 
-      description, 
+    const {
+      name,
+      price,
+      description,
       classifications,
       status,
       statusNote,
@@ -197,10 +230,10 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
 app.get("/products", checkDbConnection, async (req, res) => {
   try {
     const { status } = req.query;
-    
+
     // Filter by status if provided
     const filter = status ? { status } : {};
-    
+
     const products = await Product.find(filter).sort({ uploadDate: -1 });
     res.json({ products });
   } catch (error) {
@@ -229,16 +262,16 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
   { name: 'otherPhotos', maxCount: 10 }
 ]), async (req, res) => {
   try {
-    const { 
-      name, 
-      price, 
-      description, 
+    const {
+      name,
+      price,
+      description,
       classifications,
       status,
       statusNote,
       expectedArrival
     } = req.body;
-    
+
     const product = await Product.findById(req.params.id);
 
     if (!product) {
@@ -256,7 +289,7 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
     }
     if (description !== undefined) product.description = description; // Preserve formatting
     if (classifications !== undefined) product.classifications = classifications.trim();
-    
+
     // Update status fields
     if (status !== undefined) product.status = status;
     if (statusNote !== undefined) product.statusNote = statusNote.trim();
@@ -278,7 +311,7 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
       for (const publicId of product.otherPhotosPublicIds) {
         await safeCloudinaryDestroy(publicId);
       }
-      
+
       const otherPhotosFiles = req.files.otherPhotos;
       product.otherPhotos = otherPhotosFiles.map(file => file.path);
       product.otherPhotosPublicIds = otherPhotosFiles.map(file => file.filename);
@@ -298,7 +331,7 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
 app.patch("/products/:id/status", checkDbConnection, async (req, res) => {
   try {
     const { status, statusNote, expectedArrival } = req.body;
-    
+
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
@@ -307,9 +340,9 @@ app.patch("/products/:id/status", checkDbConnection, async (req, res) => {
     // Validate status
     const validStatuses = ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'];
     if (status && !validStatuses.includes(status)) {
-      return res.status(400).json({ 
-        error: "Invalid status", 
-        validStatuses 
+      return res.status(400).json({
+        error: "Invalid status",
+        validStatuses
       });
     }
 
@@ -359,12 +392,12 @@ app.delete("/products/:id", checkDbConnection, async (req, res) => {
 app.get("/products/status/:status", checkDbConnection, async (req, res) => {
   try {
     const { status } = req.params;
-    
+
     const validStatuses = ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'];
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({ 
-        error: "Invalid status", 
-        validStatuses 
+      return res.status(400).json({
+        error: "Invalid status",
+        validStatuses
       });
     }
 
@@ -373,6 +406,224 @@ app.get("/products/status/:status", checkDbConnection, async (req, res) => {
   } catch (error) {
     console.error('❌ Error fetching products by status:', error);
     res.status(500).json({ error: "Failed to fetch products" });
+  }
+});
+
+// ========== SITE SETTINGS ROUTES ==========
+
+// GET SITE SETTINGS
+app.get("/settings", checkDbConnection, async (req, res) => {
+  try {
+    let settings = await SiteSettings.findOne();
+
+    // Create default settings if none exist
+    if (!settings) {
+      settings = new SiteSettings();
+      await settings.save();
+      console.log('✅ Created default site settings');
+    }
+
+    res.json({ settings });
+  } catch (error) {
+    console.error('❌ Error fetching site settings:', error);
+    res.status(500).json({ error: "Failed to fetch site settings" });
+  }
+});
+
+// UPDATE SITE SETTINGS (with optional image uploads)
+app.put("/settings", checkDbConnection, uploadImage.fields([
+  { name: 'landingBanner', maxCount: 1 },
+  { name: 'logo', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const {
+      landingTitle_ka,
+      landingTitle_en,
+      landingTitle_ru,
+      landingDescription_ka,
+      landingDescription_en,
+      landingDescription_ru,
+      aboutText_ka,
+      aboutText_en,
+      aboutText_ru
+    } = req.body;
+
+    let settings = await SiteSettings.findOne();
+
+    // Create settings if doesn't exist
+    if (!settings) {
+      settings = new SiteSettings();
+    }
+
+    // Update text fields
+    if (landingTitle_ka !== undefined) settings.landingTitle.ka = landingTitle_ka;
+    if (landingTitle_en !== undefined) settings.landingTitle.en = landingTitle_en;
+    if (landingTitle_ru !== undefined) settings.landingTitle.ru = landingTitle_ru;
+
+    if (landingDescription_ka !== undefined) settings.landingDescription.ka = landingDescription_ka;
+    if (landingDescription_en !== undefined) settings.landingDescription.en = landingDescription_en;
+    if (landingDescription_ru !== undefined) settings.landingDescription.ru = landingDescription_ru;
+
+    if (aboutText_ka !== undefined) settings.aboutText.ka = aboutText_ka;
+    if (aboutText_en !== undefined) settings.aboutText.en = aboutText_en;
+    if (aboutText_ru !== undefined) settings.aboutText.ru = aboutText_ru;
+
+    // Update landing banner if uploaded
+    if (req.files && req.files.landingBanner) {
+      // Delete old banner
+      await safeCloudinaryDestroy(settings.landingBannerPublicId);
+
+      const bannerFile = req.files.landingBanner[0];
+      settings.landingBanner = bannerFile.path;
+      settings.landingBannerPublicId = bannerFile.filename;
+    }
+
+    // Update logo if uploaded
+    if (req.files && req.files.logo) {
+      // Delete old logo
+      await safeCloudinaryDestroy(settings.logoPublicId);
+
+      const logoFile = req.files.logo[0];
+      settings.logo = logoFile.path;
+      settings.logoPublicId = logoFile.filename;
+    }
+
+    settings.updatedAt = new Date();
+    await settings.save();
+
+    console.log('✅ Site settings updated');
+    res.json({ message: "Site settings updated successfully", settings });
+
+  } catch (error) {
+    console.error('❌ Error updating site settings:', error);
+    res.status(500).json({ error: "Failed to update site settings", details: error.message });
+  }
+});
+
+// UPDATE ONLY LANDING TEXT (no images)
+app.patch("/settings/landing", checkDbConnection, async (req, res) => {
+  try {
+    const {
+      landingTitle_ka,
+      landingTitle_en,
+      landingTitle_ru,
+      landingDescription_ka,
+      landingDescription_en,
+      landingDescription_ru
+    } = req.body;
+
+    let settings = await SiteSettings.findOne();
+    if (!settings) {
+      settings = new SiteSettings();
+    }
+
+    if (landingTitle_ka !== undefined) settings.landingTitle.ka = landingTitle_ka;
+    if (landingTitle_en !== undefined) settings.landingTitle.en = landingTitle_en;
+    if (landingTitle_ru !== undefined) settings.landingTitle.ru = landingTitle_ru;
+
+    if (landingDescription_ka !== undefined) settings.landingDescription.ka = landingDescription_ka;
+    if (landingDescription_en !== undefined) settings.landingDescription.en = landingDescription_en;
+    if (landingDescription_ru !== undefined) settings.landingDescription.ru = landingDescription_ru;
+
+    settings.updatedAt = new Date();
+    await settings.save();
+
+    console.log('✅ Landing text updated');
+    res.json({ message: "Landing text updated successfully", settings });
+
+  } catch (error) {
+    console.error('❌ Error updating landing text:', error);
+    res.status(500).json({ error: "Failed to update landing text" });
+  }
+});
+
+// UPDATE ONLY ABOUT TEXT (no images)
+app.patch("/settings/about", checkDbConnection, async (req, res) => {
+  try {
+    const {
+      aboutText_ka,
+      aboutText_en,
+      aboutText_ru
+    } = req.body;
+
+    let settings = await SiteSettings.findOne();
+    if (!settings) {
+      settings = new SiteSettings();
+    }
+
+    if (aboutText_ka !== undefined) settings.aboutText.ka = aboutText_ka;
+    if (aboutText_en !== undefined) settings.aboutText.en = aboutText_en;
+    if (aboutText_ru !== undefined) settings.aboutText.ru = aboutText_ru;
+
+    settings.updatedAt = new Date();
+    await settings.save();
+
+    console.log('✅ About text updated');
+    res.json({ message: "About text updated successfully", settings });
+
+  } catch (error) {
+    console.error('❌ Error updating about text:', error);
+    res.status(500).json({ error: "Failed to update about text" });
+  }
+});
+
+// UPDATE ONLY LANDING BANNER (image only)
+app.patch("/settings/banner", checkDbConnection, uploadImage.single('landingBanner'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "Landing banner image is required" });
+    }
+
+    let settings = await SiteSettings.findOne();
+    if (!settings) {
+      settings = new SiteSettings();
+    }
+
+    // Delete old banner
+    await safeCloudinaryDestroy(settings.landingBannerPublicId);
+
+    settings.landingBanner = req.file.path;
+    settings.landingBannerPublicId = req.file.filename;
+    settings.updatedAt = new Date();
+
+    await settings.save();
+
+    console.log('✅ Landing banner updated');
+    res.json({ message: "Landing banner updated successfully", settings });
+
+  } catch (error) {
+    console.error('❌ Error updating landing banner:', error);
+    res.status(500).json({ error: "Failed to update landing banner" });
+  }
+});
+
+// UPDATE ONLY LOGO (image only)
+app.patch("/settings/logo", checkDbConnection, uploadImage.single('logo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "Logo image is required" });
+    }
+
+    let settings = await SiteSettings.findOne();
+    if (!settings) {
+      settings = new SiteSettings();
+    }
+
+    // Delete old logo
+    await safeCloudinaryDestroy(settings.logoPublicId);
+
+    settings.logo = req.file.path;
+    settings.logoPublicId = req.file.filename;
+    settings.updatedAt = new Date();
+
+    await settings.save();
+
+    console.log('✅ Logo updated');
+    res.json({ message: "Logo updated successfully", settings });
+
+  } catch (error) {
+    console.error('❌ Error updating logo:', error);
+    res.status(500).json({ error: "Failed to update logo" });
   }
 });
 
@@ -397,16 +648,16 @@ const startServer = async () => {
   try {
     console.log('🔄 Connecting to MongoDB...');
     console.log('📍 MongoDB URI:', MONGODB_URI.replace(/\/\/([^:]+):([^@]+)@/, '//$1:****@'));
-    
+
     // Connect to MongoDB FIRST with options
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
     });
-    
+
     console.log('✅ Connected to MongoDB successfully!');
     console.log('📊 Database:', mongoose.connection.db.databaseName);
-    
+
     // THEN start the server
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 SmartHome Server Running!`);
@@ -414,6 +665,7 @@ const startServer = async () => {
       console.log(`🔗 Server URL: http://localhost:${PORT}`);
       console.log(`\n📋 Available Endpoints:`);
       console.log(`   GET    /                        - Health check`);
+      console.log(`\n   PRODUCTS:`);
       console.log(`   GET    /products                - Get all products`);
       console.log(`   POST   /products/upload         - Create product`);
       console.log(`   GET    /products/:id            - Get single product`);
@@ -421,6 +673,13 @@ const startServer = async () => {
       console.log(`   PATCH  /products/:id/status     - Update product status only`);
       console.log(`   DELETE /products/:id            - Delete product`);
       console.log(`   GET    /products/status/:status - Get products by status`);
+      console.log(`\n   SITE SETTINGS:`);
+      console.log(`   GET    /settings                - Get site settings`);
+      console.log(`   PUT    /settings                - Update all settings (with images)`);
+      console.log(`   PATCH  /settings/landing        - Update landing text only`);
+      console.log(`   PATCH  /settings/about          - Update about text only`);
+      console.log(`   PATCH  /settings/banner         - Update landing banner image only`);
+      console.log(`   PATCH  /settings/logo           - Update logo image only`);
       console.log('\n📦 Available Statuses:');
       console.log(`   - available    : In stock and ready`);
       console.log(`   - restoring    : Being restocked/restored`);
@@ -446,19 +705,19 @@ const startServer = async () => {
     // --- GRACEFUL SHUTDOWN ---
     const shutdown = async () => {
       console.log('\n🛑 Shutting down gracefully...');
-      
+
       try {
         await mongoose.connection.close();
         console.log('✅ MongoDB connection closed');
       } catch (err) {
         console.error('❌ Error closing MongoDB connection:', err);
       }
-      
+
       server.close(() => {
         console.log('✅ Server closed');
         process.exit(0);
       });
-      
+
       // Force close after 10s
       setTimeout(() => {
         console.error('⚠️  Forcing shutdown');
