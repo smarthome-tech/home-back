@@ -55,6 +55,7 @@ const siteConfigSchema = new mongoose.Schema({
   landingTitle: { type: String, default: '' },
   landingDescription: { type: String, default: '' },
   aboutText: { type: String, default: '' },
+  servicesText: { type: String, default: '' },
   landingBanner: { type: String, default: '' },
   landingBannerPublicId: { type: String, default: '' },
   logo: { type: String, default: '' },
@@ -63,7 +64,7 @@ const siteConfigSchema = new mongoose.Schema({
 
 // --- MODELS ---
 const Product = mongoose.model('Product', productSchema);
-const SiteConfig = mongoose.model('SiteConfig', siteConfigSchema); // → 'siteconfigs' collection
+const SiteConfig = mongoose.model('SiteConfig', siteConfigSchema);
 
 // --- EXPRESS ---
 const app = express();
@@ -289,7 +290,6 @@ app.get("/products/status/:status", checkDbConnection, async (req, res) => {
 });
 
 // ========== SITE CONFIG ==========
-// All stored in 'siteconfigs' collection — never touches old 'sitesettings'
 
 const getOrCreateConfig = async () => {
   let config = await SiteConfig.findOne();
@@ -316,12 +316,13 @@ app.put("/settings", checkDbConnection, uploadImage.fields([
   { name: 'logo', maxCount: 1 }
 ]), async (req, res) => {
   try {
-    const { landingTitle, landingDescription, aboutText } = req.body;
+    const { landingTitle, landingDescription, aboutText, servicesText } = req.body;
     const settings = await getOrCreateConfig();
 
     if (landingTitle !== undefined) settings.landingTitle = landingTitle;
     if (landingDescription !== undefined) settings.landingDescription = landingDescription;
     if (aboutText !== undefined) settings.aboutText = aboutText;
+    if (servicesText !== undefined) settings.servicesText = servicesText;
 
     if (req.files && req.files.landingBanner) {
       await safeCloudinaryDestroy(settings.landingBannerPublicId);
@@ -376,6 +377,22 @@ app.patch("/settings/about", checkDbConnection, async (req, res) => {
   } catch (error) {
     console.error('❌ Error updating about:', error);
     res.status(500).json({ error: "Failed to update about text", details: error.message });
+  }
+});
+
+app.patch("/settings/services", checkDbConnection, async (req, res) => {
+  try {
+    const { servicesText } = req.body;
+    const settings = await getOrCreateConfig();
+
+    if (servicesText !== undefined) settings.servicesText = servicesText;
+
+    await settings.save();
+    console.log('✅ Services text updated');
+    res.json({ message: "Services text updated successfully", settings });
+  } catch (error) {
+    console.error('❌ Error updating services:', error);
+    res.status(500).json({ error: "Failed to update services text", details: error.message });
   }
 });
 
@@ -460,6 +477,7 @@ const startServer = async () => {
       console.log('   PUT    /settings                - Update all settings');
       console.log('   PATCH  /settings/landing        - Update landing text');
       console.log('   PATCH  /settings/about          - Update about text');
+      console.log('   PATCH  /settings/services       - Update services text');
       console.log('   PATCH  /settings/banner         - Update banner image');
       console.log('   PATCH  /settings/logo           - Update logo image');
       console.log('\n✅ Ready!\n');
