@@ -33,6 +33,7 @@ const PORT = process.env.PORT || 5001;
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   price: { type: Number, required: true, min: 0 },
+  numeration: { type: Number, required: false, min: 0 }, // 🆕 OPTIONAL NUMERATION FIELD
   mainImage: { type: String, required: true },
   mainImagePublicId: { type: String, required: true },
   otherPhotos: [{ type: String }],
@@ -130,7 +131,7 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
 ]), async (req, res) => {
   console.log('📦 Product upload request');
   try {
-    const { name, price, description, classifications, status, statusNote, expectedArrival } = req.body;
+    const { name, price, numeration, description, classifications, status, statusNote, expectedArrival } = req.body;
 
     if (!name) return res.status(400).json({ error: "Product name is required" });
     if (!price || isNaN(parseFloat(price))) return res.status(400).json({ error: "Valid price is required" });
@@ -150,13 +151,21 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
       classifications: classifications ? classifications.trim() : '',
     };
 
+    // 🆕 ADD NUMERATION IF PROVIDED
+    if (numeration !== undefined && numeration !== null && numeration !== '') {
+      const numerationValue = parseInt(numeration);
+      if (!isNaN(numerationValue) && numerationValue >= 0) {
+        productData.numeration = numerationValue;
+      }
+    }
+
     if (status) productData.status = status;
     if (statusNote) productData.statusNote = statusNote.trim();
     if (expectedArrival) productData.expectedArrival = new Date(expectedArrival);
 
     const newProduct = new Product(productData);
     await newProduct.save();
-    console.log(`✅ Product created: ${newProduct._id}`);
+    console.log(`✅ Product created: ${newProduct._id}${productData.numeration !== undefined ? ` (numeration: ${productData.numeration})` : ''}`);
     res.status(201).json({ message: "Product created successfully!", product: newProduct });
   } catch (error) {
     console.error('❌ Error creating product:', error);
@@ -166,9 +175,21 @@ app.post("/products/upload", checkDbConnection, uploadImage.fields([
 
 app.get("/products", checkDbConnection, async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, sort } = req.query;
     const filter = status ? { status } : {};
-    const products = await Product.find(filter).sort({ uploadDate: -1 });
+
+    // 🆕 SORTING OPTIONS
+    let sortOptions = { uploadDate: -1 }; // Default: newest first
+
+    if (sort === 'numeration') {
+      // Sort by numeration ascending, then by uploadDate for items without numeration
+      sortOptions = { numeration: 1, uploadDate: -1 };
+    } else if (sort === 'numeration_desc') {
+      // Sort by numeration descending
+      sortOptions = { numeration: -1, uploadDate: -1 };
+    }
+
+    const products = await Product.find(filter).sort(sortOptions);
     res.json({ products });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch products" });
@@ -190,7 +211,7 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
   { name: 'otherPhotos', maxCount: 10 }
 ]), async (req, res) => {
   try {
-    const { name, price, description, classifications, status, statusNote, expectedArrival } = req.body;
+    const { name, price, numeration, description, classifications, status, statusNote, expectedArrival } = req.body;
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ error: "Product not found" });
 
@@ -200,6 +221,20 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
       if (isNaN(parsedPrice)) return res.status(400).json({ error: "Invalid price value" });
       product.price = parsedPrice;
     }
+
+    // 🆕 UPDATE NUMERATION
+    if (numeration !== undefined) {
+      if (numeration === null || numeration === '') {
+        // Remove numeration if empty
+        product.numeration = undefined;
+      } else {
+        const numerationValue = parseInt(numeration);
+        if (!isNaN(numerationValue) && numerationValue >= 0) {
+          product.numeration = numerationValue;
+        }
+      }
+    }
+
     if (description !== undefined) product.description = description;
     if (classifications !== undefined) product.classifications = classifications.trim();
     if (status !== undefined) product.status = status;
@@ -225,7 +260,7 @@ app.put("/products/:id", checkDbConnection, uploadImage.fields([
     }
 
     await product.save();
-    console.log(`✅ Product updated: ${req.params.id}`);
+    console.log(`✅ Product updated: ${req.params.id}${product.numeration !== undefined ? ` (numeration: ${product.numeration})` : ''}`);
     res.json({ message: "Product updated successfully", product });
   } catch (error) {
     console.error('❌ Error updating product:', error);
@@ -257,6 +292,31 @@ app.patch("/products/:id/status", checkDbConnection, async (req, res) => {
   }
 });
 
+// 🆕 NEW ENDPOINT TO UPDATE JUST NUMERATION
+app.patch("/products/:id/numeration", checkDbConnection, async (req, res) => {
+  try {
+    const { numeration } = req.body;
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    if (numeration === null || numeration === undefined || numeration === '') {
+      product.numeration = undefined;
+    } else {
+      const numerationValue = parseInt(numeration);
+      if (isNaN(numerationValue) || numerationValue < 0) {
+        return res.status(400).json({ error: "Numeration must be a positive number" });
+      }
+      product.numeration = numerationValue;
+    }
+
+    await product.save();
+    console.log(`✅ Product numeration updated: ${req.params.id} → ${product.numeration || 'removed'}`);
+    res.json({ message: "Product numeration updated successfully", product });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update product numeration" });
+  }
+});
+
 app.delete("/products/:id", checkDbConnection, async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
@@ -278,11 +338,21 @@ app.delete("/products/:id", checkDbConnection, async (req, res) => {
 app.get("/products/status/:status", checkDbConnection, async (req, res) => {
   try {
     const { status } = req.params;
+    const { sort } = req.query;
     const validStatuses = ['available', 'restoring', 'on_the_way', 'out_of_stock', 'discontinued'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: "Invalid status", validStatuses });
     }
-    const products = await Product.find({ status }).sort({ uploadDate: -1 });
+
+    // 🆕 APPLY SORTING
+    let sortOptions = { uploadDate: -1 };
+    if (sort === 'numeration') {
+      sortOptions = { numeration: 1, uploadDate: -1 };
+    } else if (sort === 'numeration_desc') {
+      sortOptions = { numeration: -1, uploadDate: -1 };
+    }
+
+    const products = await Product.find({ status }).sort(sortOptions);
     res.json({ products, count: products.length });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch products" });
@@ -466,13 +536,14 @@ const startServer = async () => {
       console.log(`\n🚀 SmartHome Server on port ${PORT}`);
       console.log('\n📋 Endpoints:');
       console.log('   GET    /                        - Health check');
-      console.log('   GET    /products                - Get all products');
+      console.log('   GET    /products                - Get all products (query: ?sort=numeration)');
       console.log('   POST   /products/upload         - Create product');
       console.log('   GET    /products/:id            - Get single product');
       console.log('   PUT    /products/:id            - Update product');
       console.log('   PATCH  /products/:id/status     - Update product status');
+      console.log('   PATCH  /products/:id/numeration - Update product numeration 🆕');
       console.log('   DELETE /products/:id            - Delete product');
-      console.log('   GET    /products/status/:status - Get by status');
+      console.log('   GET    /products/status/:status - Get by status (query: ?sort=numeration)');
       console.log('   GET    /settings                - Get site config');
       console.log('   PUT    /settings                - Update all settings');
       console.log('   PATCH  /settings/landing        - Update landing text');
